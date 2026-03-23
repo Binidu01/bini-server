@@ -1,0 +1,66 @@
+{
+  "name": "bini-server",
+  "version": "1.0.1",
+  "description": "Zero-dependency production server for bini-router apps — static files, API routes, SPA fallback",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.js"
+      }
+    }
+  },
+  "bin": {
+    "bini-server": "./dist/cli.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsup",
+    "dev": "tsup --watch",
+    "prepublishOnly": "npm run build",
+    "lint": "tsc --noEmit",
+    "clean": "rm -rf dist"
+  },
+  "dependencies": {
+    "bini-env": "^1.0.6"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "keywords": [
+    "bini",
+    "bini-js",
+    "bini-router",
+    "bini-env",
+    "server",
+    "spa",
+    "vite",
+    "hono",
+    "production",
+    "node",
+    "static-server",
+    "api-routes",
+    "etag"
+  ],
+  "author": "Binidu Ranasinghe",
+  "license": "MIT",
+  "homepage": "https://bini.js.org",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Binidu01/bini-server.git"
+  },
+  "bugs": {
+    "url": "https://github.com/Binidu01/bini-server/issues"
+  },
+  "devDependencies": {
+    "@types/node": "^25",
+    "bini-env"   : "^1.0.6",
+    "tsup"       : "^8",
+    "typescript" : "^5"
+  }
+}
