@@ -1,3 +1,23 @@
+// bini-server/src/index.ts
+
+// ─── Force production mode ────────────────────────────────────────────────────
+// bini-server is always a production server — never rely on .env for this.
+process.env.NODE_ENV = 'production';
+
+// ─── Suppress dotenv/bini-env logs before ANY other import ───────────────────
+// Must be an IIFE at the top — dotenv fires the moment it's called inside
+// loadEnv(), so the patch has to be in place before bini-env is even imported.
+;(function suppressDotenv() {
+  const _log = console.log.bind(console);
+  const _err = console.error.bind(console);
+  const isDotenv = (...args: unknown[]) => {
+    const msg = args.join(' ');
+    return msg.includes('[dotenv@') || msg.includes('[bini-env] Loaded');
+  };
+  console.log   = (...args: unknown[]) => { if (!isDotenv(...args)) _log(...args); };
+  console.error = (...args: unknown[]) => { if (!isDotenv(...args)) _err(...args); };
+})();
+
 import http from 'http';
 import fs from 'fs';
 import path from 'path';
@@ -417,10 +437,9 @@ async function sendFile(
     return;
   }
 
-  const etag          = getETag(stat);
-  const ifNoneMatch   = req.headers['if-none-match'];
+  const etag        = getETag(stat);
+  const ifNoneMatch = req.headers['if-none-match'];
 
-  // ETag-based 304 — client already has this version
   if (ifNoneMatch === etag) {
     res.writeHead(304);
     res.end();
@@ -435,7 +454,6 @@ async function sendFile(
     'X-Powered-By'  : 'Bini.js',
   });
 
-  // HEAD request — headers only, no body
   if (req.method === 'HEAD') {
     res.end();
     return;
@@ -461,7 +479,6 @@ async function serveStatic(
     return;
   }
 
-  // SPA fallback — serve index.html for all non-file routes
   const indexPath = path.join(DIST_DIR, 'index.html');
   if (fs.existsSync(indexPath)) {
     await sendFile(indexPath, req, res);
@@ -495,7 +512,7 @@ function compose(middlewares: Middleware[]) {
 // ─── Start ────────────────────────────────────────────────────────────────────
 
 export async function start() {
-  // Load .env via bini-env — no-op if vars already injected by host
+  // Load env BEFORE anything else (NODE_ENV is already locked to 'production' above)
   await loadEnv(process.cwd());
 
   if (!fs.existsSync(DIST_DIR)) {
@@ -535,7 +552,6 @@ export async function start() {
   });
 
   function shutdown() {
-    console.log(`\n  ${C.YELLOW}⚠${C.RESET}  Shutting down...\n`);
     server.close(() => process.exit(0));
     setTimeout(() => process.exit(1), 10_000).unref();
   }

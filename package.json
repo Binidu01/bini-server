@@ -1,6 +1,6 @@
 {
   "name": "bini-server",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "Zero-dependency production server for bini-router apps — static files, API routes, SPA fallback",
   "type": "module",
   "main": "./dist/index.js",
@@ -59,7 +59,7 @@
   },
   "devDependencies": {
     "@types/node": "^25",
-    "bini-env"   : "^1.0.6",
+    "bini-env"   : "^1.0.8",
     "tsup"       : "^8",
     "typescript" : "^5"
   }
