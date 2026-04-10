@@ -1,12 +1,9 @@
 // bini-server/src/index.ts
 
 // ─── Force production mode ────────────────────────────────────────────────────
-// bini-server is always a production server — never rely on .env for this.
 process.env.NODE_ENV = 'production';
 
 // ─── Suppress dotenv/bini-env logs before ANY other import ───────────────────
-// Must be an IIFE at the top — dotenv fires the moment it's called inside
-// loadEnv(), so the patch has to be in place before bini-env is even imported.
 ;(function suppressDotenv() {
   const _log = console.log.bind(console);
   const _err = console.error.bind(console);
@@ -14,7 +11,7 @@ process.env.NODE_ENV = 'production';
     const msg = args.join(' ');
     return msg.includes('[dotenv@') || msg.includes('[bini-env] Loaded');
   };
-  console.log   = (...args: unknown[]) => { if (!isDotenv(...args)) _log(...args); };
+  console.log = (...args: unknown[]) => { if (!isDotenv(...args)) _log(...args); };
   console.error = (...args: unknown[]) => { if (!isDotenv(...args)) _err(...args); };
 })();
 
@@ -31,35 +28,31 @@ import { loadEnv, detectEnvFiles } from 'bini-env';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
-const DEFAULT_PORT    = parseInt(process.env.PORT ?? '3000', 10);
-const API_DIR         = path.join(process.cwd(), process.env.BINI_API_DIR  ?? 'src/app/api');
-const DIST_DIR        = path.join(process.cwd(), process.env.BINI_DIST_DIR ?? 'dist');
-const API_EXTS        = ['.ts', '.js'] as const;
-const BODY_TIMEOUT    = 30_000;
+const DEFAULT_PORT = parseInt(process.env.PORT ?? '3000', 10);
+const API_DIR = path.join(process.cwd(), process.env.BINI_API_DIR ?? 'src/app/api');
+const DIST_DIR = path.join(process.cwd(), process.env.BINI_DIST_DIR ?? 'dist');
+const API_EXTS = ['.ts', '.js'] as const;
+const BODY_TIMEOUT = 30_000;
 const HANDLER_TIMEOUT = 30_000;
-const BODY_SIZE_LIMIT = 10 * 1024 * 1024; // 10 MB
+const BODY_SIZE_LIMIT = 10 * 1024 * 1024;
 
 const C = {
-  CYAN  : '\x1b[36m',
-  RESET : '\x1b[0m',
-  GREEN : '\x1b[32m',
-  RED   : '\x1b[31m',
+  CYAN: '\x1b[36m',
+  RESET: '\x1b[0m',
+  GREEN: '\x1b[32m',
+  RED: '\x1b[31m',
   YELLOW: '\x1b[33m',
-  DIM   : '\x1b[2m',
+  DIM: '\x1b[2m',
 } as const;
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 interface ApiRoute {
-  routePath : string;
-  filePath  : string;
+  routePath: string;
+  filePath: string;
 }
 
-type Middleware = (
-  req : http.IncomingMessage,
-  res : http.ServerResponse,
-  next: () => void,
-) => void | Promise<void>;
+type Middleware = (req: http.IncomingMessage, res: http.ServerResponse, next: () => void) => void | Promise<void>;
 
 // ─── Network ──────────────────────────────────────────────────────────────────
 
@@ -76,31 +69,23 @@ function getAllNetworkIps(): string[] {
   return [...new Set(ips)];
 }
 
-// ─── Banner ───────────────────────────────────────────────────────────────────
-
 function printBanner(port: number) {
   const networkIps = getAllNetworkIps();
-  const envFiles   = detectEnvFiles(process.cwd()).map(f => f.name);
+  const envFiles = detectEnvFiles(process.cwd()).map(f => f.name);
 
   console.log(`\n  ${C.CYAN}ß Bini.js${C.RESET} (production)\n`);
-
   if (envFiles.length > 0) {
     console.log(`  ${C.GREEN}➜${C.RESET}  Environments: ${envFiles.join(', ')}`);
   }
-
   console.log(`  ${C.GREEN}➜${C.RESET}  Local:   ${C.CYAN}http://localhost:${port}/${C.RESET}`);
   for (const ip of networkIps) {
     console.log(`  ${C.GREEN}➜${C.RESET}  Network: ${C.CYAN}http://${ip}:${port}/${C.RESET}`);
   }
-
   if (!fs.existsSync(API_DIR)) {
     console.log(`\n  ${C.DIM}No api directory found — API routes disabled.${C.RESET}`);
   }
-
   console.log('');
 }
-
-// ─── Port finder ──────────────────────────────────────────────────────────────
 
 async function isPortFree(port: number): Promise<boolean> {
   return new Promise(resolve => {
@@ -130,8 +115,11 @@ function scanApiRoutes(dir: string, baseRoute = ''): ApiRoute[] {
   if (!fs.existsSync(dir)) return routes;
 
   let entries: fs.Dirent[];
-  try { entries = fs.readdirSync(dir, { withFileTypes: true }); }
-  catch { return routes; }
+  try {
+    entries = fs.readdirSync(dir, { withFileTypes: true });
+  } catch {
+    return routes;
+  }
 
   for (const entry of entries) {
     if (entry.name.startsWith('_') || entry.name.startsWith('.')) continue;
@@ -139,33 +127,36 @@ function scanApiRoutes(dir: string, baseRoute = ''): ApiRoute[] {
 
     if (entry.isDirectory()) {
       const isCatchAll = entry.name.startsWith('[...') && entry.name.endsWith(']');
-      const isDynamic  = entry.name.startsWith('[') && entry.name.endsWith(']');
-      const segment    = isCatchAll ? '*' : isDynamic ? `:${entry.name.slice(1, -1)}` : entry.name;
+      const isDynamic = entry.name.startsWith('[') && entry.name.endsWith(']');
+      const segment = isCatchAll ? '*' : isDynamic ? `:${entry.name.slice(1, -1)}` : entry.name;
       routes.push(...scanApiRoutes(fullPath, `${baseRoute}/${segment}`));
       continue;
     }
 
-    const ext  = path.extname(entry.name);
+    const ext = path.extname(entry.name);
     const base = path.basename(entry.name, ext);
     if (!(API_EXTS as readonly string[]).includes(ext)) continue;
 
     const isCatchAll = base.startsWith('[...') && base.endsWith(']');
-    const isDynamic  = base.startsWith('[') && base.endsWith(']');
-    const routePath  = isCatchAll
-      ? `${baseRoute}/*`
-      : base === 'index'
-        ? baseRoute || '/'
-        : isDynamic
-          ? `${baseRoute}/:${base.slice(1, -1)}`
-          : `${baseRoute}/${base}`;
+    const isDynamic = base.startsWith('[') && base.endsWith(']');
 
-    routes.push({ routePath, filePath: fullPath });
+    let routePath: string;
+    if (isCatchAll) {
+      routePath = `${baseRoute}/*`;
+    } else if (base === 'index') {
+      routePath = baseRoute || '/';
+    } else if (isDynamic) {
+      routePath = `${baseRoute}/:${base.slice(1, -1)}`;
+    } else {
+      routePath = `${baseRoute}/${base}`;
+    }
+
+    const normalizedPath = `/api${routePath}`;
+    routes.push({ routePath: normalizedPath, filePath: fullPath });
   }
 
   return routes;
 }
-
-// ─── Route matcher ────────────────────────────────────────────────────────────
 
 function matchRoute(pattern: string, pathname: string): Record<string, string> | null {
   const patParts = pattern.split('/').filter(Boolean);
@@ -201,19 +192,23 @@ const moduleCache = new Map<string, { mtime: number; handler: unknown }>();
 
 async function importHandler(filePath: string): Promise<unknown> {
   let mtime = 0;
-  try { mtime = fs.statSync(filePath).mtimeMs; } catch { /* vanished */ }
+  try {
+    mtime = fs.statSync(filePath).mtimeMs;
+  } catch {
+    return null;
+  }
 
   const cached = moduleCache.get(filePath);
   if (cached && cached.mtime === mtime) return cached.handler;
 
   try {
-    const mod     = await import(pathToFileURL(filePath).href + '?t=' + mtime);
+    const mod = await import(pathToFileURL(filePath).href + '?t=' + mtime);
     const handler = mod.default ?? null;
     moduleCache.set(filePath, { mtime, handler });
     return handler;
-  } catch (e) {
+  } catch {
     moduleCache.delete(filePath);
-    throw e;
+    return null;
   }
 }
 
@@ -252,36 +247,30 @@ function readBody(req: http.IncomingMessage): Promise<Buffer | undefined> {
   });
 }
 
-// ─── Normalize headers ────────────────────────────────────────────────────────
-
 function normalizeHeaders(raw: http.IncomingHttpHeaders): Record<string, string> {
   const out: Record<string, string> = {};
   for (const [k, v] of Object.entries(raw)) {
     if (v === undefined) continue;
-    out[k] = Array.isArray(v)
-      ? k.toLowerCase() === 'cookie' ? v.join('; ') : v.join(', ')
-      : v;
+    out[k] = Array.isArray(v) ? (k.toLowerCase() === 'cookie' ? v.join('; ') : v.join(', ')) : v;
   }
   return out;
 }
 
-// ─── CORS headers ─────────────────────────────────────────────────────────────
-
 const CORS_HEADERS: Record<string, string> = {
-  'Access-Control-Allow-Origin' : '*',
+  'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Methods': 'GET,POST,PUT,PATCH,DELETE,OPTIONS',
   'Access-Control-Allow-Headers': 'Content-Type,Authorization',
 };
 
+function isHonoApp(handler: any): boolean {
+  return handler && typeof handler.fetch === 'function';
+}
+
 // ─── API middleware ───────────────────────────────────────────────────────────
 
-let routeCache: { routes: ApiRoute[] } | null = null;
+let routeCache: ApiRoute[] | null = null;
 
-async function handleApiRequest(
-  req : http.IncomingMessage,
-  res : http.ServerResponse,
-  next: () => void,
-) {
+async function handleApiRequest(req: http.IncomingMessage, res: http.ServerResponse, next: () => void) {
   try {
     if (req.method === 'OPTIONS') {
       res.writeHead(204, { ...CORS_HEADERS, 'Access-Control-Max-Age': '86400' });
@@ -290,13 +279,27 @@ async function handleApiRequest(
     }
 
     if (!routeCache) {
-      routeCache = { routes: scanApiRoutes(API_DIR, '/api') };
+      routeCache = scanApiRoutes(API_DIR);
     }
 
-    const host     = req.headers.host ?? 'localhost';
-    const url      = `http://${host}${req.url}`;
+    const host = req.headers.host ?? 'localhost';
+    const url = `http://${host}${req.url ?? ''}`;
     const pathname = new URL(url).pathname;
-    const method   = (req.method ?? 'GET').toUpperCase();
+    const method = (req.method ?? 'GET').toUpperCase();
+
+    let matchedRoute: ApiRoute | undefined;
+    for (const route of routeCache) {
+      if (matchRoute(route.routePath, pathname) !== null) {
+        matchedRoute = route;
+        break;
+      }
+    }
+
+    if (!matchedRoute) {
+      res.writeHead(404, { 'Content-Type': 'application/json', ...CORS_HEADERS });
+      res.end(JSON.stringify({ error: `No API handler found for ${req.url}` }));
+      return;
+    }
 
     let body: Buffer | undefined;
     try {
@@ -307,81 +310,61 @@ async function handleApiRequest(
       return;
     }
 
-    const webReq = new Request(url, {
-      method,
-      headers: normalizeHeaders(req.headers),
-      body   : (body as BodyInit | null) ?? null,
-    });
-
-    for (const route of routeCache.routes) {
-      let handler: unknown;
-      try {
-        handler = await importHandler(route.filePath);
-      } catch (e: any) {
-        res.writeHead(500, { 'Content-Type': 'application/json', ...CORS_HEADERS });
-        res.end(JSON.stringify({ error: `Failed to load handler: ${e.message}` }));
-        return;
-      }
-
-      if (!handler) continue;
-
-      let webRes: Response;
-
-      try {
-        if (typeof (handler as any).fetch === 'function') {
-          const result = await Promise.race([
-            (handler as any).fetch(webReq.clone()),
-            new Promise<never>((_, reject) =>
-              setTimeout(() => reject(new Error('Handler timeout')), HANDLER_TIMEOUT)
-            ),
-          ]);
-          webRes = result as Response;
-          if (webRes.status === 404) continue;
-
-        } else if (typeof handler === 'function') {
-          const params = matchRoute(route.routePath, pathname);
-          if (params === null) continue;
-
-          const reqWithParams = new Request(webReq.clone(), {
-            headers: {
-              ...normalizeHeaders(req.headers),
-              'x-bini-params': JSON.stringify(params),
-            },
-          });
-
-          const result = await Promise.race([
-            (handler as Function)(reqWithParams),
-            new Promise<never>((_, reject) =>
-              setTimeout(() => reject(new Error('Handler timeout')), HANDLER_TIMEOUT)
-            ),
-          ]);
-
-          webRes = result instanceof Response
-            ? result
-            : new Response(JSON.stringify(result), {
-                status : 200,
-                headers: { 'Content-Type': 'application/json' },
-              });
-        } else {
-          continue;
-        }
-      } catch (e: any) {
-        res.writeHead(500, { 'Content-Type': 'application/json', ...CORS_HEADERS });
-        res.end(JSON.stringify({ error: e.message ?? 'Internal Server Error' }));
-        return;
-      }
-
-      const finalHeaders: Record<string, string> = { ...CORS_HEADERS };
-      webRes.headers.forEach((v, k) => { finalHeaders[k] = v; });
-
-      res.writeHead(webRes.status, finalHeaders);
-      res.end(Buffer.from(await webRes.arrayBuffer()));
+    const handler = await importHandler(matchedRoute.filePath);
+    if (!handler) {
+      res.writeHead(500, { 'Content-Type': 'application/json', ...CORS_HEADERS });
+      res.end(JSON.stringify({ error: `Failed to load handler for ${matchedRoute.routePath}` }));
       return;
     }
 
-    res.writeHead(404, { 'Content-Type': 'application/json', ...CORS_HEADERS });
-    res.end(JSON.stringify({ error: `No API handler found for ${req.url}` }));
-  } catch {
+    let webRes: Response;
+
+    try {
+      if (isHonoApp(handler)) {
+        const newUrl = url.replace(/^https?:\/\/[^\/]+\/api/, `http://${host}`);
+        const modifiedReq = new Request(newUrl, {
+          method,
+          headers: normalizeHeaders(req.headers),
+          body: (body as BodyInit | null) ?? null,
+        });
+        webRes = await (handler as any).fetch(modifiedReq);
+      } else if (typeof handler === 'function') {
+        const params = matchRoute(matchedRoute.routePath, pathname);
+        const reqWithParams = new Request(url, {
+          method,
+          headers: {
+            ...normalizeHeaders(req.headers),
+            'x-bini-params': JSON.stringify(params ?? {}),
+          },
+          body: (body as BodyInit | null) ?? null,
+        });
+
+        const result = await Promise.race([
+          (handler as Function)(reqWithParams),
+          new Promise<never>((_, reject) => setTimeout(() => reject(new Error('Handler timeout')), HANDLER_TIMEOUT)),
+        ]);
+
+        webRes = result instanceof Response ? result : new Response(JSON.stringify(result), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      } else {
+        throw new Error('Invalid handler type');
+      }
+    } catch (e: any) {
+      res.writeHead(500, { 'Content-Type': 'application/json', ...CORS_HEADERS });
+      res.end(JSON.stringify({ error: e.message ?? 'Internal Server Error' }));
+      return;
+    }
+
+    const finalHeaders: Record<string, string> = { ...CORS_HEADERS };
+    webRes.headers.forEach((v, k) => {
+      finalHeaders[k] = v;
+    });
+
+    res.writeHead(webRes.status, finalHeaders);
+    res.end(Buffer.from(await webRes.arrayBuffer()));
+  } catch (e: any) {
     next();
   }
 }
@@ -389,55 +372,48 @@ async function handleApiRequest(
 // ─── Static file server ───────────────────────────────────────────────────────
 
 const MIME: Record<string, string> = {
-  '.html'       : 'text/html; charset=utf-8',
-  '.js'         : 'application/javascript',
-  '.mjs'        : 'application/javascript',
-  '.css'        : 'text/css',
-  '.json'       : 'application/json',
-  '.png'        : 'image/png',
-  '.jpg'        : 'image/jpeg',
-  '.jpeg'       : 'image/jpeg',
-  '.gif'        : 'image/gif',
-  '.svg'        : 'image/svg+xml',
-  '.ico'        : 'image/x-icon',
-  '.webp'       : 'image/webp',
-  '.avif'       : 'image/avif',
-  '.woff'       : 'font/woff',
-  '.woff2'      : 'font/woff2',
-  '.ttf'        : 'font/ttf',
-  '.eot'        : 'application/vnd.ms-fontobject',
-  '.txt'        : 'text/plain',
-  '.xml'        : 'application/xml',
+  '.html': 'text/html; charset=utf-8',
+  '.js': 'application/javascript',
+  '.mjs': 'application/javascript',
+  '.css': 'text/css',
+  '.json': 'application/json',
+  '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.gif': 'image/gif',
+  '.svg': 'image/svg+xml',
+  '.ico': 'image/x-icon',
+  '.webp': 'image/webp',
+  '.avif': 'image/avif',
+  '.woff': 'font/woff',
+  '.woff2': 'font/woff2',
+  '.ttf': 'font/ttf',
+  '.eot': 'application/vnd.ms-fontobject',
+  '.txt': 'text/plain',
+  '.xml': 'application/xml',
   '.webmanifest': 'application/manifest+json',
-  '.map'        : 'application/json',
+  '.map': 'application/json',
 };
 
 function getETag(stat: fs.Stats): string {
-  return crypto
-    .createHash('md5')
-    .update(`${stat.size}-${stat.mtimeMs}`)
-    .digest('hex')
-    .slice(0, 16);
+  return crypto.createHash('md5').update(`${stat.size}-${stat.mtimeMs}`).digest('hex').slice(0, 16);
 }
 
-async function sendFile(
-  filePath: string,
-  req     : http.IncomingMessage,
-  res     : http.ServerResponse,
-) {
-  const ext      = path.extname(filePath).toLowerCase();
+async function sendFile(filePath: string, req: http.IncomingMessage, res: http.ServerResponse) {
+  const ext = path.extname(filePath).toLowerCase();
   const mimeType = MIME[ext] ?? 'application/octet-stream';
-  const isAsset  = filePath.includes(`${path.sep}assets${path.sep}`);
+  const isAsset = filePath.includes(`${path.sep}assets${path.sep}`);
 
   let stat: fs.Stats;
-  try { stat = fs.statSync(filePath); }
-  catch {
+  try {
+    stat = await fs.promises.stat(filePath);
+  } catch {
     res.writeHead(404);
     res.end('Not found');
     return;
   }
 
-  const etag        = getETag(stat);
+  const etag = getETag(stat);
   const ifNoneMatch = req.headers['if-none-match'];
 
   if (ifNoneMatch === etag) {
@@ -447,11 +423,11 @@ async function sendFile(
   }
 
   res.writeHead(200, {
-    'Content-Type'  : mimeType,
+    'Content-Type': mimeType,
     'Content-Length': stat.size,
-    'Cache-Control' : isAsset ? 'public, max-age=31536000, immutable' : 'no-cache',
-    'ETag'          : etag,
-    'X-Powered-By'  : 'Bini.js',
+    'Cache-Control': isAsset ? 'public, max-age=31536000, immutable' : 'no-cache',
+    'ETag': etag,
+    'X-Powered-By': 'Bini.js',
   });
 
   if (req.method === 'HEAD') {
@@ -466,26 +442,34 @@ async function sendFile(
   }
 }
 
-async function serveStatic(
-  req : http.IncomingMessage,
-  res : http.ServerResponse,
-  next: () => void,
-) {
-  const pathname = new URL(req.url ?? '/', `http://localhost`).pathname;
+async function serveStatic(req: http.IncomingMessage, res: http.ServerResponse, next: () => void) {
+  const pathname = new URL(req.url ?? '/', 'http://localhost').pathname;
+
+  if (pathname.startsWith('/api')) {
+    return next();
+  }
+
   const filePath = path.join(DIST_DIR, pathname);
 
-  if (fs.existsSync(filePath) && fs.statSync(filePath).isFile()) {
-    await sendFile(filePath, req, res);
-    return;
+  try {
+    await fs.promises.access(filePath);
+    const stat = await fs.promises.stat(filePath);
+    if (stat.isFile()) {
+      await sendFile(filePath, req, res);
+      return;
+    }
+  } catch {
+    // File doesn't exist, continue to fallback
   }
 
   const indexPath = path.join(DIST_DIR, 'index.html');
-  if (fs.existsSync(indexPath)) {
+  try {
+    await fs.promises.access(indexPath);
     await sendFile(indexPath, req, res);
     return;
+  } catch {
+    next();
   }
-
-  next();
 }
 
 // ─── Middleware composer ──────────────────────────────────────────────────────
@@ -493,7 +477,7 @@ async function serveStatic(
 function compose(middlewares: Middleware[]) {
   return async (req: http.IncomingMessage, res: http.ServerResponse) => {
     let idx = 0;
-    async function next() {
+    const next = async (): Promise<void> => {
       if (idx >= middlewares.length) return;
       const fn = middlewares[idx++];
       try {
@@ -504,7 +488,7 @@ function compose(middlewares: Middleware[]) {
           res.end(JSON.stringify({ error: e?.message ?? 'Internal Server Error' }));
         }
       }
-    }
+    };
     await next();
   };
 }
@@ -512,7 +496,6 @@ function compose(middlewares: Middleware[]) {
 // ─── Start ────────────────────────────────────────────────────────────────────
 
 export async function start() {
-  // Load env BEFORE anything else (NODE_ENV is already locked to 'production' above)
   await loadEnv(process.cwd());
 
   if (!fs.existsSync(DIST_DIR)) {
@@ -545,17 +528,17 @@ export async function start() {
   });
 
   server.keepAliveTimeout = 65_000;
-  server.headersTimeout   = 66_000;
+  server.headersTimeout = 66_000;
 
   server.listen(port, '0.0.0.0', () => {
     printBanner(port);
   });
 
-  function shutdown() {
+  const shutdown = () => {
     server.close(() => process.exit(0));
     setTimeout(() => process.exit(1), 10_000).unref();
-  }
+  };
 
   process.on('SIGTERM', shutdown);
-  process.on('SIGINT',  shutdown);
+  process.on('SIGINT', shutdown);
 }

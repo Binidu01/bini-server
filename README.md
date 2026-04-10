@@ -8,7 +8,7 @@
 [![bini-env](https://img.shields.io/badge/bini--env-powered-00CFFF?labelColor=0a0a0a&style=flat-square)](https://www.npmjs.com/package/bini-env)
 
 **Zero-dependency production server for [bini-router](https://www.npmjs.com/package/bini-router) apps.**  
-Serves your `dist/` statically and proxies `/api/*` to your `src/app/api/` handlers — just like Vite's preview server, but for production.
+Serves your `dist/` statically and handles `/api/*` from your `src/app/api/` handlers — just like `vite preview`, but production-grade.
 
 </div>
 
@@ -18,15 +18,15 @@ Serves your `dist/` statically and proxies `/api/*` to your `src/app/api/` handl
 
 - ⚡ **Zero dependencies** — pure Node.js built-ins only
 - 🗂️ **Static file serving** — streams `dist/` with correct MIME types, ETag, and cache headers
-- 🌐 **API routes** — proxies `/api/*` to your `src/app/api/` handlers (Hono apps + plain functions)
+- 🌐 **API routes** — serves `/api/*` from your `src/app/api/` handlers (Hono apps + plain functions)
 - 🔀 **SPA fallback** — unknown routes serve `dist/index.html`
-- 🌿 **Auto env loading** — `.env` loaded automatically via [bini-env](https://www.npmjs.com/package/bini-env) — no dotenv setup needed
+- 🌿 **Auto env loading** — `.env` loaded automatically via [bini-env](https://www.npmjs.com/package/bini-env)
 - 🏷️ **ETag support** — `304 Not Modified` responses for unchanged files
 - 🛡️ **CORS** — enabled by default on all API responses
-- ⏱️ **Timeouts** — 30s body read + 30s handler timeout with proper error responses
+- ⏱️ **Timeouts** — 30s body read timeout + 30s handler timeout
 - 🔒 **Body limit** — 10MB request body limit
-- 🔌 **Port auto-increment** — starts at 3000, increments if busy
-- 🪄 **Graceful shutdown** — handles SIGTERM + SIGINT with 10s force-exit fallback
+- 🔌 **Port auto-increment** — starts at `3000`, increments if busy
+- 🪄 **Graceful shutdown** — handles `SIGTERM` + `SIGINT` with 10s force-exit fallback
 - 🖥️ **Cross-platform** — works on Windows, macOS, and Linux
 
 ---
@@ -80,55 +80,34 @@ Terminal output:
 
 ## Environment Variables
 
-bini-server uses [bini-env](https://www.npmjs.com/package/bini-env) to automatically load `.env` before the server starts — no manual dotenv setup needed.
+`.env` is loaded automatically at startup — all vars are available in `process.env` in your API handlers with no imports needed.
 
 ```env
-# .env
 PORT=3000
-
-# Server-side vars — used by API routes via getEnv() / requireEnv()
 SMTP_USER=user@smtp.example.com
 SMTP_PASS=your_password
-FROM_EMAIL=App <noreply@example.com>
-
-# Client-side vars — already baked into dist/ at build time, ignored by server
-BINI_FIREBASE_API_KEY=your_key
 ```
-
-> Client-side `BINI_*` vars are baked into `dist/` at build time by Vite — bini-server loads them into `process.env` but never uses them. They don't cause any errors.
 
 ---
 
-## How it works
+## Important: ship your `src/` folder
 
-bini-server runs a plain Node.js `http` server with a three-layer middleware stack:
+bini-server runs your API handlers directly from `src/app/api/` — they are **not** compiled into `dist/`. When deploying, make sure your server has access to both `dist/` and `src/app/api/`.
 
-```
-Request
-  │
-  ├─ /api/*  →  src/app/api/ handlers  (Hono apps or plain functions)
-  │
-  ├─ /*      →  stream static file from dist/  (with ETag + cache headers)
-  │
-  └─ /*      →  dist/index.html                (SPA fallback)
-```
-
-No Vite, no Express, no Fastify — just Node's built-in `http` module.
+For VPS/pm2 this means deploying your full project directory, not just `dist/`. For Railway, Render, and Fly.io this happens automatically since they clone your repository.
 
 ---
 
 ## Port
 
-Default port is `3000`. Override via environment variable:
-
-```bash
-PORT=8080 bini-server
-```
-
-Or in `.env`:
+Default port is `3000`. Override via `.env` or inline:
 
 ```env
 PORT=8080
+```
+
+```bash
+PORT=8080 bini-server
 ```
 
 If the port is busy, bini-server automatically increments and warns:
@@ -141,42 +120,11 @@ If the port is busy, bini-server automatically increments and warns:
 
 ## Configurable Directories
 
-By default bini-server reads from `src/app/api/` and `dist/`. Override via env vars if your project uses a different structure:
+By default bini-server reads from `src/app/api/` and `dist/`. Override via env vars:
 
 ```env
 BINI_API_DIR=src/api        # default: src/app/api
 BINI_DIST_DIR=build         # default: dist
-```
-
----
-
-## API Routes
-
-bini-server reads `src/app/api/` directly — the same files your dev server uses. Both Hono apps and plain function handlers are supported. `getEnv` and `requireEnv` are auto-imported by bini-router so no imports needed:
-
-```ts
-// src/app/api/email.ts
-import { Hono } from 'hono'
-import nodemailer from 'nodemailer'
-
-const app = new Hono().basePath('/api')
-
-const transporter = nodemailer.createTransport({
-  host: 'smtp-relay.brevo.com',
-  port: 587,
-  auth: {
-    user: requireEnv('SMTP_USER'),  // auto-imported, throws if missing
-    pass: requireEnv('SMTP_PASS'),
-  },
-})
-
-app.post('/email', async (c) => {
-  const { to, subject, html } = await c.req.json()
-  await transporter.sendMail({ from: requireEnv('FROM_EMAIL'), to, subject, html })
-  return c.json({ ok: true })
-})
-
-export default app
 ```
 
 ---
@@ -201,7 +149,7 @@ pm2 startup
 
 ### Railway
 
-Set start command to `npm start` in your Railway project settings. Railway injects `PORT` automatically.
+Set start command to `npm start`. Railway injects `PORT` automatically.
 
 ### Render
 
@@ -217,32 +165,16 @@ Set start command to `npm start`. Render injects `PORT` automatically.
 
 ---
 
-## Project structure
-
-bini-server expects the standard bini-router project layout:
-
-```
-my-app/
-├── src/
-│   └── app/
-│       └── api/         ← API route handlers
-├── dist/                ← built frontend (vite build output)
-├── .env                 ← environment variables
-└── package.json
-```
-
----
-
 ## vs `vite preview`
 
 | Feature | `vite preview` | `bini-server` |
 |---|---|---|
 | Serves `dist/` | ✅ | ✅ |
-| API routes | ✅ via bini-router | ✅ via bini-router |
+| API routes | ✅ | ✅ |
 | SPA fallback | ✅ | ✅ |
-| Auto env loading | ✅ via bini-env | ✅ via bini-env |
+| Auto env loading | ✅ | ✅ |
 | ETag / 304 support | ❌ | ✅ |
-| Production use | ❌ not recommended | ✅ |
+| Production use | ❌ | ✅ |
 | Body timeout | ❌ | ✅ 30s |
 | Body size limit | ❌ | ✅ 10MB |
 | Handler timeout | ❌ | ✅ 30s |
