@@ -2,12 +2,12 @@
 
 <div align="center">
 
-[![npm version](https://img.shields.io/npm/v/bini-server?color=00CFFF&labelColor=0a0a0a&style=flat-square)](https://www.npmjs.com/package/bini-server)
-[![license](https://img.shields.io/badge/license-MIT-00CFFF?labelColor=0a0a0a&style=flat-square)](./LICENSE)
-[![node](https://img.shields.io/badge/node-%3E%3D18-00CFFF?labelColor=0a0a0a&style=flat-square)](https://nodejs.org)
-[![bini-env](https://img.shields.io/badge/bini--env-powered-00CFFF?labelColor=0a0a0a&style=flat-square)](https://www.npmjs.com/package/bini-env)
+[![npm version](https://img.shields.io/npm/v/bini-server?style=flat-square&logo=npm&logoColor=white&label=npm&color=CB3837&labelColor=0a0a0a)](https://www.npmjs.com/package/bini-server)
+[![license](https://img.shields.io/badge/license-MIT-green?style=flat-square&logo=opensourceinitiative&logoColor=white&labelColor=0a0a0a)](./LICENSE)
+[![node](https://img.shields.io/badge/node-%3E%3D18-339933?style=flat-square&logo=nodedotjs&logoColor=white&labelColor=0a0a0a)](https://nodejs.org)
+[![bini-env](https://img.shields.io/badge/bini--env-powered-00CFFF?style=flat-square&logo=vite&logoColor=white&labelColor=0a0a0a)](https://www.npmjs.com/package/bini-env)
 
-**Zero-dependency production server for [bini-router](https://www.npmjs.com/package/bini-router) apps.**  
+**Production server for [bini-router](https://www.npmjs.com/package/bini-router) apps.**  
 Serves your `dist/` statically and handles `/api/*` from your `src/app/api/` handlers — just like `vite preview`, but production-grade.
 
 </div>
@@ -16,17 +16,17 @@ Serves your `dist/` statically and handles `/api/*` from your `src/app/api/` han
 
 ## Features
 
-- ⚡ **Zero dependencies** — pure Node.js built-ins only
 - 🗂️ **Static file serving** — streams `dist/` with correct MIME types, ETag, and cache headers
 - 🌐 **API routes** — serves `/api/*` from your `src/app/api/` handlers (Hono apps + plain functions)
 - 🔀 **SPA fallback** — unknown routes serve `dist/index.html`
 - 🌿 **Auto env loading** — `.env` loaded automatically via [bini-env](https://www.npmjs.com/package/bini-env)
 - 🏷️ **ETag support** — `304 Not Modified` responses for unchanged files
 - 🛡️ **CORS** — enabled by default on all API responses
-- ⏱️ **Timeouts** — 30s body read timeout + 30s handler timeout
-- 🔒 **Body limit** — 10MB request body limit
+- ⏱️ **Timeouts** — configurable body read + handler timeouts (default 30s each)
+- 🔒 **Body limit** — configurable request body limit (default 10MB)
 - 🔌 **Port auto-increment** — starts at `3000`, increments if busy
 - 🪄 **Graceful shutdown** — handles `SIGTERM` + `SIGINT` with 10s force-exit fallback
+- ⌨️ **Interactive keyboard shortcuts** — `h` for help, `o` to open in browser, `q` to quit
 - 🖥️ **Cross-platform** — works on Windows, macOS, and Linux
 
 ---
@@ -69,12 +69,24 @@ npm start       # serve it in production
 Terminal output:
 
 ```
-  ß Bini.js (production)
-
+  ß Bini.js  (production)
   ➜  Environments: .env
   ➜  Local:   http://localhost:3000/
   ➜  Network: http://192.168.1.5:3000/
+  ➜  press h + enter to show help
 ```
+
+---
+
+## Keyboard Shortcuts
+
+Once the server is running, type a key and press `enter`:
+
+| Key | Action |
+|-----|--------|
+| `h` | Show available shortcuts |
+| `o` | Open in browser |
+| `q` | Quit |
 
 ---
 
@@ -87,6 +99,19 @@ PORT=3000
 SMTP_USER=user@smtp.example.com
 SMTP_PASS=your_password
 ```
+
+### Server Configuration
+
+These variables tune server behaviour and can be set in `.env` or inline:
+
+| Variable | Default | Description |
+|---|---|---|
+| `PORT` | `3000` | HTTP port to listen on |
+| `BINI_API_DIR` | `src/app/api` | Path to API handlers directory |
+| `BINI_DIST_DIR` | `dist` | Path to static files directory |
+| `BINI_BODY_TIMEOUT_SECS` | `30` | Max seconds to read request body |
+| `BINI_HANDLER_TIMEOUT_SECS` | `30` | Max seconds for an API handler to respond |
+| `BINI_BODY_SIZE_LIMIT` | `10485760` | Max request body size in bytes (default 10MB) |
 
 ---
 
@@ -113,18 +138,7 @@ PORT=8080 bini-server
 If the port is busy, bini-server automatically increments and warns:
 
 ```
-  ⚠  Port 3000 is in use, using port 3001 instead.
-```
-
----
-
-## Configurable Directories
-
-By default bini-server reads from `src/app/api/` and `dist/`. Override via env vars:
-
-```env
-BINI_API_DIR=src/api        # default: src/app/api
-BINI_DIST_DIR=build         # default: dist
+  ⚠  Port 3000 in use — using 3001 instead.
 ```
 
 ---
@@ -179,8 +193,8 @@ Set start command to `npm start`. Render injects `PORT` automatically.
 | Body size limit | ❌ | ✅ 10MB |
 | Handler timeout | ❌ | ✅ 30s |
 | Graceful shutdown | ❌ | ✅ |
+| Keyboard shortcuts | ❌ | ✅ |
 | Configurable dirs | ❌ | ✅ |
-| Zero dependencies | ✅ | ✅ |
 
 ---
 
