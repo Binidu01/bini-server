@@ -133,6 +133,11 @@ async function findFreePort(start: number): Promise<number> {
 // ─── Interactive keyboard loop ────────────────────────────────────────────────
 
 function startKeyboardLoop(port: number): void {
+  // Skip keyboard loop in non-interactive environments (like Render)
+  if (!process.stdin.isTTY) {
+    return;
+  }
+
   const rl = readline.createInterface({ input: process.stdin });
 
   rl.on('line', (line: string) => {
