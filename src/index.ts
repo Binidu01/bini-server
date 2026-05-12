@@ -140,8 +140,8 @@ function startKeyboardLoop(port: number): void {
       case 'h':
         console.log('');
         console.log('  Shortcuts');
-        console.log(`  ${C.DIM}${C.GREEN}➜${C.RESET}  ${C.DIM}press ${C.RESET}o + enter${C.DIM} to open in browser${C.RESET}`);
-        console.log(`  ${C.DIM}${C.GREEN}➜${C.RESET}  ${C.DIM}press ${C.RESET}q + enter${C.DIM} to quit${C.RESET}`);
+        console.log(`  ${C.DIM}press ${C.RESET}o + enter${C.DIM} to open in browser${C.RESET}`);
+        console.log(`  ${C.DIM}press ${C.RESET}q + enter${C.DIM} to quit${C.RESET}`);
         console.log('');
         break;
       case 'o': {

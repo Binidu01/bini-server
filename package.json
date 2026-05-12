@@ -1,6 +1,6 @@
 {
   "name": "bini-server",
-  "version": "1.0.7",
+  "version": "1.0.8",
   "description": "Production server for bini-router apps.",
   "type": "module",
   "main": "./dist/index.cjs",
