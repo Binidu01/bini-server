@@ -4,8 +4,7 @@
 
 [![npm version](https://img.shields.io/npm/v/bini-server?style=flat-square&logo=npm&logoColor=white&label=npm&color=CB3837&labelColor=0a0a0a)](https://www.npmjs.com/package/bini-server)
 [![license](https://img.shields.io/badge/license-MIT-green?style=flat-square&logo=opensourceinitiative&logoColor=white&labelColor=0a0a0a)](./LICENSE)
-[![node](https://img.shields.io/badge/node-%3E%3D18-339933?style=flat-square&logo=nodedotjs&logoColor=white&labelColor=0a0a0a)](https://nodejs.org)
-[![bini-env](https://img.shields.io/badge/bini--env-powered-00CFFF?style=flat-square&logo=vite&logoColor=white&labelColor=0a0a0a)](https://www.npmjs.com/package/bini-env)
+[![node](https://img.shields.io/badge/node-%3E%3D20-339933?style=flat-square&logo=nodedotjs&logoColor=white&labelColor=0a0a0a)](https://nodejs.org)
 
 **Production server for [bini-router](https://www.npmjs.com/package/bini-router) apps.**  
 Serves your `dist/` statically and handles `/api/*` from your `src/app/api/` handlers — just like `vite preview`, but production-grade.
@@ -19,7 +18,7 @@ Serves your `dist/` statically and handles `/api/*` from your `src/app/api/` han
 - 🗂️ **Static file serving** — streams `dist/` with correct MIME types, ETag, and cache headers
 - 🌐 **API routes** — serves `/api/*` from your `src/app/api/` handlers (Hono apps + plain functions)
 - 🔀 **SPA fallback** — unknown routes serve `dist/index.html`
-- 🌿 **Auto env loading** — `.env` loaded automatically via [bini-env](https://www.npmjs.com/package/bini-env)
+- 🌿 **Auto env loading** — `.env` files detected and listed automatically at startup
 - 🏷️ **ETag support** — `304 Not Modified` responses for unchanged files
 - 🛡️ **CORS** — enabled by default on all API responses
 - ⏱️ **Timeouts** — configurable body read + handler timeouts (default 30s each)
@@ -33,7 +32,7 @@ Serves your `dist/` statically and handles `/api/*` from your `src/app/api/` han
 
 ## Requirements
 
-- Node.js **≥ 18**
+- Node.js **≥ 20**
 - A [bini-router](https://www.npmjs.com/package/bini-router) project with a built `dist/`
 
 ---
@@ -92,7 +91,7 @@ Once the server is running, type a key and press `enter`:
 
 ## Environment Variables
 
-`.env` is loaded automatically at startup — all vars are available in `process.env` in your API handlers with no imports needed.
+`.env` files are detected automatically at startup and listed in the banner. All vars are available in `process.env` in your API handlers with no imports needed.
 
 ```env
 PORT=3000
@@ -193,7 +192,7 @@ Set start command to `npm start`. Render injects `PORT` automatically.
 | Body size limit | ❌ | ✅ 10MB |
 | Handler timeout | ❌ | ✅ 30s |
 | Graceful shutdown | ❌ | ✅ |
-| Keyboard shortcuts | ❌ | ✅ |
+| Handler module cache | ❌ | ✅ |
 | Configurable dirs | ❌ | ✅ |
 
 ---

@@ -1,20 +1,5 @@
 // bini-server/src/index.ts
 
-// ─── Force production mode ────────────────────────────────────────────────────
-process.env.NODE_ENV = 'production';
-
-// ─── Suppress dotenv/bini-env logs before ANY other import ───────────────────
-;(function suppressDotenv() {
-  const _log = console.log.bind(console);
-  const _err = console.error.bind(console);
-  const isDotenv = (...args: unknown[]) => {
-    const msg = args.join(' ');
-    return msg.includes('[dotenv@') || msg.includes('[bini-env] Loaded');
-  };
-  console.log = (...args: unknown[]) => { if (!isDotenv(...args)) _log(...args); };
-  console.error = (...args: unknown[]) => { if (!isDotenv(...args)) _err(...args); };
-})();
-
 import http from 'http';
 import fs from 'fs';
 import path from 'path';
@@ -26,7 +11,15 @@ import { exec } from 'child_process';
 import { pathToFileURL } from 'url';
 import { pipeline } from 'stream/promises';
 import { createReadStream } from 'fs';
-import { loadEnv, detectEnvFiles } from 'bini-env';
+function detectEnvFiles(root: string): string[] {
+  const nodeEnv = process.env.NODE_ENV ?? 'production';
+  return [
+    '.env.local',
+    `.env.${nodeEnv}.local`,
+    `.env.${nodeEnv}`,
+    '.env',
+  ].filter(f => fs.existsSync(path.join(root, f)));
+}
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -78,11 +71,10 @@ function getNetworkIp(): string | null {
       const isPrivate = a === 10
         || (a === 172 && b >= 16 && b <= 31)
         || (a === 192 && b === 168);
-      if (isPrivate) return iface.address; // first private LAN wins
+      if (isPrivate) return iface.address;
     }
   }
 
-  // Fallback: first non-loopback IPv4
   for (const name in ifaces) {
     if (SKIP.test(name)) continue;
     for (const iface of ifaces[name] ?? []) {
@@ -96,7 +88,7 @@ function getNetworkIp(): string | null {
 // ─── Banner ───────────────────────────────────────────────────────────────────
 
 function printBanner(port: number): void {
-  const envFiles  = detectEnvFiles(process.cwd()).map((f: { name: string }) => f.name);
+  const envFiles  = detectEnvFiles(process.cwd());
   const networkIp = getNetworkIp();
 
   console.log(`\n  ${C.BOLD}${C.CYAN}ß Bini.js${C.RESET}  (production)`);
@@ -111,7 +103,7 @@ function printBanner(port: number): void {
     console.log(`  ${C.GREEN}➜${C.RESET}  Network: ${C.CYAN}http://${networkIp}:${port}/${C.RESET}`);
   }
 
-  console.log(`  ${C.GREEN}➜${C.RESET}  ${C.DIM}press ${C.RESET}h${C.DIM} + ${C.RESET}enter${C.DIM} to show help${C.RESET}`);
+  console.log(`  ${C.DIM}${C.GREEN}➜${C.RESET}  ${C.DIM}press ${C.RESET}h + enter${C.DIM} to show help${C.RESET}`);
   console.log('');
 }
 
@@ -148,8 +140,8 @@ function startKeyboardLoop(port: number): void {
       case 'h':
         console.log('');
         console.log('  Shortcuts');
-        console.log(`  ${C.DIM}press ${C.RESET}o${C.DIM} + ${C.RESET}enter${C.DIM} to open in browser${C.RESET}`);
-        console.log(`  ${C.DIM}press ${C.RESET}q${C.DIM} + ${C.RESET}enter${C.DIM} to quit${C.RESET}`);
+        console.log(`  ${C.DIM}${C.GREEN}➜${C.RESET}  ${C.DIM}press ${C.RESET}o + enter${C.DIM} to open in browser${C.RESET}`);
+        console.log(`  ${C.DIM}${C.GREEN}➜${C.RESET}  ${C.DIM}press ${C.RESET}q + enter${C.DIM} to quit${C.RESET}`);
         console.log('');
         break;
       case 'o': {
@@ -316,6 +308,15 @@ const CORS_HEADERS: Record<string, string> = {
   'Vary': 'Origin',
 };
 
+// ─── Hono env() adapter binding ───────────────────────────────────────────────
+
+function invokeHono(
+  honoApp: { fetch: Function },
+  request: Request,
+): Promise<Response> {
+  return honoApp.fetch(request, process.env);
+}
+
 // ─── API handler ──────────────────────────────────────────────────────────────
 
 let routeCache: ApiRoute[] | null = null;
@@ -385,9 +386,8 @@ async function handleApiRequest(
   let webRes: Response;
   try {
     if (typeof (handler as any).fetch === 'function') {
-      // Hono app — strip /api prefix so Hono sees clean paths
       const honoUrl = `http://${host}${pathname.replace(/^\/api/, '') || '/'}${search}`;
-      webRes = await (handler as any).fetch(new Request(honoUrl, {
+      webRes = await invokeHono(handler as { fetch: Function }, new Request(honoUrl, {
         method,
         headers: normalizedHeaders,
         body: body ? new Uint8Array(body) : null,
@@ -556,8 +556,6 @@ function compose(middlewares: Middleware[]) {
 // ─── Start ────────────────────────────────────────────────────────────────────
 
 export async function start(): Promise<void> {
-  await loadEnv(process.cwd());
-
   if (!fs.existsSync(DIST_DIR)) {
     console.error(`\n  ${C.RED}✗${C.RESET}  dist/ not found at ${DIST_DIR}.\n      Run ${C.CYAN}npm run build${C.RESET} first.\n`);
     process.exit(1);

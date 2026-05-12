@@ -1,6 +1,6 @@
 {
   "name": "bini-server",
-  "version": "1.0.4",
+  "version": "1.0.6",
   "description": "Production server for bini-router apps.",
   "type": "module",
   "main": "./dist/index.cjs",
@@ -31,9 +31,6 @@
     "lint": "tsc --noEmit",
     "clean": "rm -rf dist"
   },
-  "dependencies": {
-    "bini-env": "1.0.8"
-  },
   "engines": {
     "node": ">=20.19.0"
   },
@@ -41,7 +38,6 @@
     "bini",
     "bini-js",
     "bini-router",
-    "bini-env",
     "server",
     "spa",
     "vite",
@@ -63,8 +59,9 @@
     "url": "https://github.com/Binidu01/bini-server/issues"
   },
   "devDependencies": {
-    "@types/node": "^25.6.0",
+    "@types/node": "^25.7.0",
     "tsup": "^8.5.1",
-    "typescript": "^5.9.3"
+    "typescript": "^6.0.3",
+     "dotenv": "^17.4.2"
   }
 }
