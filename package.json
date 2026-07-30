@@ -1,0 +1,66 @@
+{
+  "name": "bini-server",
+  "version": "1.0.10",
+  "description": "Production server for bini-router apps.",
+  "type": "module",
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.js"
+      },
+      "require": {
+        "types": "./dist/index.d.cts",
+        "default": "./dist/index.cjs"
+      }
+    }
+  },
+  "bin": {
+    "bini-server": "./dist/cli.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsup",
+    "dev": "tsup --watch",
+    "prepublishOnly": "npm run build",
+    "lint": "tsc --noEmit",
+    "clean": "rm -rf dist"
+  },
+  "engines": {
+    "node": ">=20.19.0"
+  },
+  "keywords": [
+    "bini",
+    "bini-js",
+    "bini-router",
+    "server",
+    "spa",
+    "vite",
+    "hono",
+    "production",
+    "node",
+    "static-server",
+    "api-routes",
+    "etag"
+  ],
+  "author": "Binidu Ranasinghe",
+  "license": "MIT",
+  "homepage": "https://bini.js.org",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Binidu01/bini-server.git"
+  },
+  "bugs": {
+    "url": "https://github.com/Binidu01/bini-server/issues"
+  },
+  "devDependencies": {
+    "@types/node": "^26.1.2",
+    "tsup": "^8.5.1",
+    "typescript": "^6.0.3"
+  }
+}
