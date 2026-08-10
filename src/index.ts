@@ -12,6 +12,21 @@ import { pathToFileURL } from 'url';
 import { pipeline } from 'stream/promises';
 import { createReadStream } from 'fs';
 
+// ─── Types ────────────────────────────────────────────────────────────────────
+
+interface ApiRoute {
+  routePath: string;
+  filePath: string;
+}
+
+type Middleware = (
+  req: http.IncomingMessage,
+  res: http.ServerResponse,
+  next: () => void,
+) => void | Promise<void>;
+
+// ─── Environment ─────────────────────────────────────────────────────────────
+
 function detectEnvFiles(root: string): string[] {
   const nodeEnv = process.env.NODE_ENV ?? 'production';
   return [
@@ -22,23 +37,12 @@ function detectEnvFiles(root: string): string[] {
   ].filter(f => fs.existsSync(path.join(root, f)));
 }
 
-// ─── Helpers for env var resolution ──────────────────────────────────────────
-
 function getEnvVar(key: string, defaultValue?: string): string | undefined {
   const biniKey = `BINI_${key}`;
-  if (process.env[biniKey] !== undefined) {
-    return process.env[biniKey];
-  }
-
+  if (process.env[biniKey] !== undefined) return process.env[biniKey];
   const viteKey = `VITE_${key}`;
-  if (process.env[viteKey] !== undefined) {
-    return process.env[viteKey];
-  }
-
-  if (process.env[key] !== undefined) {
-    return process.env[key];
-  }
-
+  if (process.env[viteKey] !== undefined) return process.env[viteKey];
+  if (process.env[key] !== undefined) return process.env[key];
   return defaultValue;
 }
 
@@ -77,18 +81,102 @@ const C = {
   DIM: '\x1b[2m',
 } as const;
 
-// ─── Types ────────────────────────────────────────────────────────────────────
+// ─── Shell Route Scanner ────────────────────────────────────────────────────
 
-interface ApiRoute {
-  routePath: string;
-  filePath: string;
+/**
+ * Scans the dist directory to find shell routes
+ * Shell routes are directories with [param] pattern
+ * Example: /blog/[id]/index.html
+ */
+function scanShellRoutes(): Set<string> {
+  const shellRoutes = new Set<string>();
+  const rootDir = DIST_DIR;
+
+  function walkDir(dir: string, currentPath: string): void {
+    try {
+      const entries = fs.readdirSync(dir, { withFileTypes: true });
+      
+      for (const entry of entries) {
+        if (!entry.isDirectory()) continue;
+        if (entry.name.startsWith('.') || entry.name === 'node_modules') continue;
+        
+        const fullPath = path.join(dir, entry.name);
+        const routePath = currentPath ? `${currentPath}/${entry.name}` : entry.name;
+        
+        // Check if this is a shell route directory ([param] or [...slug])
+        if (entry.name.startsWith('[') && entry.name.endsWith(']')) {
+          const indexPath = path.join(fullPath, 'index.html');
+          if (fs.existsSync(indexPath)) {
+            // Convert file path to URL route
+            // /blog/[id] → /blog/[id]
+            shellRoutes.add(`/${routePath}`);
+          }
+        }
+        
+        // Continue walking
+        walkDir(fullPath, routePath);
+      }
+    } catch {
+      // Skip directories that can't be read
+    }
+  }
+
+  try {
+    walkDir(rootDir, '');
+  } catch {
+    // Root directory doesn't exist
+  }
+
+  return shellRoutes;
 }
 
-type Middleware = (
-  req: http.IncomingMessage,
-  res: http.ServerResponse,
-  next: () => void,
-) => void | Promise<void>;
+// Cache shell routes after first scan
+let shellRouteCache: Set<string> | null = null;
+
+function getShellRoutes(): Set<string> {
+  if (!shellRouteCache) {
+    shellRouteCache = scanShellRoutes();
+  }
+  return shellRouteCache;
+}
+
+function findMatchingShellRoute(pathname: string): string | null {
+  const shellRoutes = getShellRoutes();
+  
+  // Remove trailing slash and leading slash
+  const cleanPath = pathname.replace(/^\/|\/$/g, '');
+  const pathSegments = cleanPath.split('/').filter(Boolean);
+  
+  // Check if any shell route matches
+  for (const shellRoute of shellRoutes) {
+    const cleanShell = shellRoute.replace(/^\/|\/$/g, '');
+    const shellSegments = cleanShell.split('/').filter(Boolean);
+    
+    // If lengths don't match, skip
+    if (shellSegments.length !== pathSegments.length) continue;
+    
+    // Check if segments match
+    let matches = true;
+    for (let i = 0; i < shellSegments.length; i++) {
+      const segment = shellSegments[i];
+      // If it's a dynamic segment ([param] or [...slug]), it matches anything
+      if (segment.startsWith('[') && segment.endsWith(']')) {
+        continue;
+      }
+      // Otherwise, exact match required
+      if (segment !== pathSegments[i]) {
+        matches = false;
+        break;
+      }
+    }
+    
+    if (matches) {
+      return shellRoute;
+    }
+  }
+  
+  return null;
+}
 
 // ─── Network ──────────────────────────────────────────────────────────────────
 
@@ -167,10 +255,7 @@ async function findFreePort(start: number): Promise<number> {
 // ─── Interactive keyboard loop ────────────────────────────────────────────────
 
 function startKeyboardLoop(port: number): void {
-  // Skip keyboard loop in non-interactive environments (like Render)
-  if (!process.stdin.isTTY) {
-    return;
-  }
+  if (!process.stdin.isTTY) return;
 
   const rl = readline.createInterface({ input: process.stdin });
 
@@ -179,8 +264,8 @@ function startKeyboardLoop(port: number): void {
       case 'h':
         console.log('');
         console.log('  Shortcuts');
-        console.log(`  ${C.DIM}press ${C.RESET}o + enter${C.DIM} to open in browser${C.RESET}`);
-        console.log(`  ${C.DIM}press ${C.RESET}q + enter${C.DIM} to quit${C.RESET}`);
+        console.log(`  ${C.DIM}press ${C.RESET}o + enter${C.RESET} to open in browser${C.RESET}`);
+        console.log(`  ${C.DIM}press ${C.RESET}q + enter${C.RESET} to quit${C.RESET}`);
         console.log('');
         break;
       case 'o': {
@@ -199,28 +284,26 @@ function startKeyboardLoop(port: number): void {
   rl.on('close', () => process.exit(0));
 }
 
-// ─── Route Scanner (Lazy - runs on first API request) ────────────────────
+// ─── API Route Scanner ────────────────────────────────────────────────────
 
-// Pre-compiled patterns for speed
+let routeCache: ApiRoute[] | null = null;
+let routeIndex = new Map<string, ApiRoute>();
+
 const API_EXTS = new Set(['.ts', '.js']);
 const CATCH_ALL_PATTERN = /^\[\.\.\.[^\]]+\]$/;
 const DYNAMIC_PATTERN = /^\[[^\]]+\]$/;
 const SKIP_PATTERN = /^[_.]/;
 
-let routeCache: ApiRoute[] | null = null;
-let routeIndex = new Map<string, ApiRoute>();
-
 function getRouteCache(): ApiRoute[] {
   if (!routeCache) {
     const start = Date.now();
     routeCache = scanApiRoutes(API_DIR);
-    // Build index for O(1) lookups
     routeIndex.clear();
     for (let i = 0; i < routeCache.length; i++) {
       routeIndex.set(routeCache[i].routePath, routeCache[i]);
     }
     if (process.env.NODE_ENV === 'development') {
-      console.log(`[bini-server] Routes scanned in ${Date.now() - start}ms`);
+      console.log(`[bini-server] API routes scanned in ${Date.now() - start}ms`);
     }
   }
   return routeCache;
@@ -384,15 +467,6 @@ const CORS_HEADERS: Record<string, string> = {
   'Vary': 'Origin',
 };
 
-// ─── Hono env() adapter binding ───────────────────────────────────────────────
-
-function invokeHono(
-  honoApp: { fetch: Function },
-  request: Request,
-): Promise<Response> {
-  return honoApp.fetch(request, process.env);
-}
-
 // ─── API Handler ────────────────────────────────────────────────────────────
 
 async function handleApiRequest(
@@ -400,7 +474,6 @@ async function handleApiRequest(
   res: http.ServerResponse,
   next: () => void,
 ): Promise<void> {
-  // Fast path: OPTIONS
   if (req.method === 'OPTIONS') {
     const headers = CORS_ENABLED
       ? { ...CORS_HEADERS, 'Access-Control-Max-Age': '86400' }
@@ -410,9 +483,7 @@ async function handleApiRequest(
     return;
   }
 
-  // Lazy load routes (only on first API request)
   const routes = getRouteCache();
-
   const host = req.headers.host ?? 'localhost';
   const rawUrl = `http://${host}${req.url ?? '/'}`;
   const method = (req.method ?? 'GET').toUpperCase();
@@ -428,7 +499,6 @@ async function handleApiRequest(
 
   const { pathname, search } = parsedUrl;
 
-  // Fast route matching - try exact match first (O(1))
   let matchedRoute: ApiRoute | null = null;
   let params: Record<string, string> | null = null;
 
@@ -436,7 +506,6 @@ async function handleApiRequest(
     matchedRoute = routeIndex.get(pathname)!;
     params = {};
   } else {
-    // Fallback to pattern matching
     for (let i = 0; i < routes.length; i++) {
       const route = routes[i];
       params = matchRoute(route.routePath, pathname);
@@ -480,12 +549,11 @@ async function handleApiRequest(
   try {
     if (typeof (handler as any).fetch === 'function') {
       const honoUrl = `http://${host}${pathname.replace(/^\/api/, '') || '/'}${search}`;
-      webRes = await invokeHono(handler as { fetch: Function }, new Request(honoUrl, {
+      webRes = await (handler as { fetch: Function }).fetch(new Request(honoUrl, {
         method,
         headers: normalizedHeaders,
         body: body ? new Uint8Array(body) : null,
       }));
-
     } else if (typeof handler === 'function') {
       const reqWithParams = new Request(rawUrl, {
         method,
@@ -506,7 +574,6 @@ async function handleApiRequest(
           status: 200,
           headers: { 'Content-Type': 'application/json' },
         });
-
     } else {
       const headers = CORS_ENABLED ? { ...CORS_HEADERS } : {};
       res.writeHead(500, { 'Content-Type': 'application/json', ...headers });
@@ -609,15 +676,54 @@ async function serveStatic(
   next: () => void,
 ): Promise<void> {
   const pathname = new URL(req.url ?? '/', 'http://localhost').pathname;
+  
+  // API routes are handled separately
   if (pathname.startsWith('/api')) return next();
 
-  const filePath = path.join(DIST_DIR, pathname);
+  // Check if it's an asset with extension
+  const hasExtension = path.extname(pathname).length > 0;
+  if (hasExtension) {
+    const filePath = path.join(DIST_DIR, pathname);
+    try {
+      const stat = await fs.promises.stat(filePath);
+      if (stat.isFile()) {
+        await sendFile(filePath, req, res);
+        return;
+      }
+    } catch {
+      // File doesn't exist, continue
+    }
+    return next();
+  }
 
+  // Try to serve as static file (e.g., /about → /about/index.html)
+  const staticFilePath = path.join(DIST_DIR, pathname, 'index.html');
   try {
-    const stat = await fs.promises.stat(filePath);
-    if (stat.isFile()) { await sendFile(filePath, req, res); return; }
-  } catch { /* fall through */ }
+    const stat = await fs.promises.stat(staticFilePath);
+    if (stat.isFile()) {
+      await sendFile(staticFilePath, req, res);
+      return;
+    }
+  } catch {
+    // File doesn't exist
+  }
 
+  // Check if this is a dynamic route that should use a shell
+  const matchingShell = findMatchingShellRoute(pathname);
+  if (matchingShell) {
+    const shellPath = path.join(DIST_DIR, matchingShell, 'index.html');
+    try {
+      const stat = await fs.promises.stat(shellPath);
+      if (stat.isFile()) {
+        await sendFile(shellPath, req, res);
+        return;
+      }
+    } catch {
+      // Shell doesn't exist
+    }
+  }
+
+  // Fallback to index.html (SPA mode)
   const indexPath = path.join(DIST_DIR, 'index.html');
   try {
     await fs.promises.access(indexPath);
@@ -655,6 +761,9 @@ export async function start(): Promise<void> {
     console.error(`\n  ${C.RED}✗${C.RESET}  dist/ not found at ${DIST_DIR}.\n      Run ${C.CYAN}npm run build${C.RESET} first.\n`);
     process.exit(1);
   }
+
+  // Pre-scan shell routes at startup
+  getShellRoutes();
 
   const port = await findFreePort(DEFAULT_PORT);
 
