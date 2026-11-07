@@ -1,28 +1,24 @@
 {
   "name": "bini-server",
-  "version": "2.0.0",
+  "version": "2.0.1",
   "description": "Production server for bini-router apps.",
   "type": "module",
-  "main": "./dist/index.cjs",
+  "main": "./dist/index.js",
   "module": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {
     ".": {
-      "import": {
-        "types": "./dist/index.d.ts",
-        "default": "./dist/index.js"
-      },
-      "require": {
-        "types": "./dist/index.d.cts",
-        "default": "./dist/index.cjs"
-      }
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
     }
   },
   "bin": {
     "bini-server": "./dist/cli.js"
   },
   "files": [
-    "dist"
+    "dist",
+    "README.md",
+    "LICENSE"
   ],
   "scripts": {
     "build": "tsup",
@@ -32,7 +28,7 @@
     "clean": "rm -rf dist"
   },
   "engines": {
-    "node": ">=20.19.0"
+    "node": ">=20.12.0"
   },
   "keywords": [
     "bini",
@@ -59,9 +55,16 @@
   "bugs": {
     "url": "https://github.com/Binidu01/bini-server/issues"
   },
+  "dependencies": {
+    "bini-env": "2.0.1"
+  },
   "devDependencies": {
-    "@types/node": "^26.1.2",
+    "@types/node": "^22.10.0",
     "tsup": "^8.5.1",
-    "typescript": "^6.0.3"
+    "typescript": "^5.8.3"
+  },
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
   }
 }

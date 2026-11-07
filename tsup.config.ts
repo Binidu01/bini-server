@@ -1,28 +1,36 @@
-import { defineConfig } from 'tsup'
+import { defineConfig } from 'tsup';
 
 export default defineConfig([
   {
-    entry    : { cli: 'src/cli.ts' },
-    format   : ['esm'],
-    target   : 'node22',
-    platform : 'node',
-    outDir   : 'dist',
-    clean    : true,
+    entry: { cli: 'src/cli.ts' },
+    format: ['esm'],
+    target: 'node20',
+    platform: 'node',
+    outDir: 'dist',
+    clean: true,
     splitting: false,
-    sourcemap: false,
-    dts      : false,
-    shims    : false,
+    sourcemap: true,
+    dts: false,
+    shims: false,
+    outExtension() {
+      return { js: '.js' };
+    },
+    external: ['bini-env', 'bini-env/node', 'bini-router', 'hono', 'hono/adapter'],
   },
   {
-    entry    : { index: 'src/index.ts' },
-    format   : ['esm'],
-    target   : 'node22',
-    platform : 'node',
-    outDir   : 'dist',
-    clean    : false,
+    entry: { index: 'src/index.ts' },
+    format: ['esm'],
+    target: 'node20',
+    platform: 'node',
+    outDir: 'dist',
+    clean: false,
     splitting: false,
-    sourcemap: false,
-    dts      : false,
-    shims    : false,
+    sourcemap: true,
+    dts: true,
+    shims: false,
+    outExtension() {
+      return { js: '.js' };
+    },
+    external: ['bini-env', 'bini-env/node', 'bini-router', 'hono', 'hono/adapter'],
   },
-])
+]);

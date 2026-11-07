@@ -1,7 +1,7 @@
 // bini-server/src/index.ts
 
 import http from 'http';
-import fs from 'fs';
+import fs, { createReadStream } from 'fs';
 import path from 'path';
 import os from 'os';
 import net from 'net';
@@ -9,15 +9,11 @@ import crypto from 'crypto';
 import readline from 'readline';
 import { exec } from 'child_process';
 import { pathToFileURL } from 'url';
+import { Readable } from 'stream';
 import { pipeline } from 'stream/promises';
-import { createReadStream } from 'fs';
+import { loadEnvFiles, envFilesFor } from 'bini-env/node';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
-
-interface ApiRoute {
-  routePath: string;
-  filePath: string;
-}
 
 type Middleware = (
   req: http.IncomingMessage,
@@ -26,16 +22,6 @@ type Middleware = (
 ) => void | Promise<void>;
 
 // ─── Environment ─────────────────────────────────────────────────────────────
-
-function detectEnvFiles(root: string): string[] {
-  const nodeEnv = process.env.NODE_ENV ?? 'production';
-  return [
-    '.env.local',
-    `.env.${nodeEnv}.local`,
-    `.env.${nodeEnv}`,
-    '.env',
-  ].filter(f => fs.existsSync(path.join(root, f)));
-}
 
 function getEnvVar(key: string, defaultValue?: string): string | undefined {
   const biniKey = `BINI_${key}`;
@@ -46,12 +32,6 @@ function getEnvVar(key: string, defaultValue?: string): string | undefined {
   return defaultValue;
 }
 
-function getEnvVarBoolean(key: string, defaultValue: boolean): boolean {
-  const value = getEnvVar(key);
-  if (value === undefined) return defaultValue;
-  return value !== 'false' && value !== '0' && value !== '';
-}
-
 function getEnvVarNumber(key: string, defaultValue: number): number {
   const value = getEnvVar(key);
   if (value === undefined) return defaultValue;
@@ -59,15 +39,55 @@ function getEnvVarNumber(key: string, defaultValue: number): number {
   return isNaN(parsed) ? defaultValue : parsed;
 }
 
-// ─── Constants ──────────────────────────────────────────────────────────────
+// ─── Config ──────────────────────────────────────────────────────────────────
 
-const DEFAULT_PORT = getEnvVarNumber('PORT', 3000);
-const BODY_TIMEOUT = getEnvVarNumber('BODY_TIMEOUT_SECS', 30) * 1000;
-const HANDLER_TIMEOUT = getEnvVarNumber('HANDLER_TIMEOUT_SECS', 30) * 1000;
-const BODY_SIZE_LIMIT = getEnvVarNumber('BODY_SIZE_LIMIT', 10 * 1024 * 1024);
-const API_DIR = path.join(process.cwd(), getEnvVar('API_DIR') ?? 'src/app/api');
-const DIST_DIR = path.join(process.cwd(), getEnvVar('DIST_DIR') ?? 'dist');
-const CORS_ENABLED = getEnvVarBoolean('CORS_ENABLED', true);
+interface Config {
+  defaultPort: number;
+  bodyTimeout: number;
+  handlerTimeout: number;
+  bodySizeLimit: number;
+  distDir: string;
+  compiledApiDir: string;
+  apiDir: string;
+  apiEntry: string;
+  base: string;
+  isProd: boolean;
+}
+
+function readConfig(): Config {
+  const distDir = path.join(process.cwd(), getEnvVar('DIST_DIR') ?? 'dist');
+  const apiDir = path.join(distDir, 'api');
+  const apiEntry = path.join(apiDir, 'index.mjs');
+
+  const rawBase = (getEnvVar('BASE') ?? '').trim();
+  const base =
+    !rawBase || rawBase === '/' || rawBase === '.' || rawBase === './'
+      ? ''
+      : '/' + rawBase.replace(/^\/+|\/+$/g, '');
+
+  return {
+    defaultPort: getEnvVarNumber('PORT', 3000),
+    bodyTimeout: getEnvVarNumber('BODY_TIMEOUT_SECS', 30) * 1000,
+    handlerTimeout: getEnvVarNumber('HANDLER_TIMEOUT_SECS', 30) * 1000,
+    bodySizeLimit: getEnvVarNumber('BODY_SIZE_LIMIT', 10 * 1024 * 1024),
+    distDir,
+    compiledApiDir: apiDir + path.sep,
+    apiDir,
+    apiEntry,
+    base,
+    isProd: process.env.NODE_ENV === 'production',
+  };
+}
+
+let config: Config = readConfig();
+
+function refreshConfig(): void {
+  config = readConfig();
+}
+
+function resolveApiEntry(): string | null {
+  return fs.existsSync(config.apiEntry) ? config.apiEntry : null;
+}
 
 // ─── ANSI colours ─────────────────────────────────────────────────────────────
 
@@ -81,56 +101,56 @@ const C = {
   DIM: '\x1b[2m',
 } as const;
 
+// ─── Path helpers (BASE-aware) ────────────────────────────────────────────────
+
+function stripBase(pathname: string): string | null {
+  const base = config.base;
+  if (!base) return pathname || '/';
+  if (pathname === base || pathname === base + '/') return '/';
+  if (pathname.startsWith(base + '/')) return pathname.slice(base.length) || '/';
+  return null;
+}
+
 // ─── Shell Route Scanner ────────────────────────────────────────────────────
 
-/**
- * Scans the dist directory to find shell routes
- * Shell routes are directories with [param] pattern
- * Example: /blog/[id]/index.html
- */
 function scanShellRoutes(): Set<string> {
   const shellRoutes = new Set<string>();
-  const rootDir = DIST_DIR;
+  const rootDir = config.distDir;
 
   function walkDir(dir: string, currentPath: string): void {
     try {
       const entries = fs.readdirSync(dir, { withFileTypes: true });
-      
+
       for (const entry of entries) {
         if (!entry.isDirectory()) continue;
-        if (entry.name.startsWith('.') || entry.name === 'node_modules') continue;
-        
+        if (entry.name.startsWith('.') || entry.name === 'node_modules' || entry.name === 'api') continue;
+
         const fullPath = path.join(dir, entry.name);
         const routePath = currentPath ? `${currentPath}/${entry.name}` : entry.name;
-        
-        // Check if this is a shell route directory ([param] or [...slug])
+
         if (entry.name.startsWith('[') && entry.name.endsWith(']')) {
           const indexPath = path.join(fullPath, 'index.html');
           if (fs.existsSync(indexPath)) {
-            // Convert file path to URL route
-            // /blog/[id] → /blog/[id]
             shellRoutes.add(`/${routePath}`);
           }
         }
-        
-        // Continue walking
+
         walkDir(fullPath, routePath);
       }
     } catch {
-      // Skip directories that can't be read
+      // Skip unreadable directories
     }
   }
 
   try {
     walkDir(rootDir, '');
   } catch {
-    // Root directory doesn't exist
+    // Root missing
   }
 
   return shellRoutes;
 }
 
-// Cache shell routes after first scan
 let shellRouteCache: Set<string> | null = null;
 
 function getShellRoutes(): Set<string> {
@@ -142,39 +162,49 @@ function getShellRoutes(): Set<string> {
 
 function findMatchingShellRoute(pathname: string): string | null {
   const shellRoutes = getShellRoutes();
-  
-  // Remove trailing slash and leading slash
-  const cleanPath = pathname.replace(/^\/|\/$/g, '');
-  const pathSegments = cleanPath.split('/').filter(Boolean);
-  
-  // Check if any shell route matches
+  const pathSegments = pathname.replace(/^\/|\/$/g, '').split('/').filter(Boolean);
+
   for (const shellRoute of shellRoutes) {
-    const cleanShell = shellRoute.replace(/^\/|\/$/g, '');
-    const shellSegments = cleanShell.split('/').filter(Boolean);
-    
-    // If lengths don't match, skip
+    const shellSegments = shellRoute.replace(/^\/|\/$/g, '').split('/').filter(Boolean);
+    if (shellSegments.length === 0) continue;
+
+    const last = shellSegments[shellSegments.length - 1];
+    const isRequiredCatchAll = last.startsWith('[...') && !last.startsWith('[[...');
+    const isOptionalCatchAll = last.startsWith('[[...');
+    const isCatchAll = isRequiredCatchAll || isOptionalCatchAll;
+
+    if (isCatchAll) {
+      const prefix = shellSegments.slice(0, -1);
+      if (pathSegments.length < prefix.length) continue;
+      if (isRequiredCatchAll && pathSegments.length === prefix.length) continue;
+
+      let matches = true;
+      for (let i = 0; i < prefix.length; i++) {
+        const seg = prefix[i];
+        if (seg.startsWith('[') && seg.endsWith(']')) continue;
+        if (seg !== pathSegments[i]) {
+          matches = false;
+          break;
+        }
+      }
+      if (matches) return shellRoute;
+      continue;
+    }
+
     if (shellSegments.length !== pathSegments.length) continue;
-    
-    // Check if segments match
+
     let matches = true;
     for (let i = 0; i < shellSegments.length; i++) {
-      const segment = shellSegments[i];
-      // If it's a dynamic segment ([param] or [...slug]), it matches anything
-      if (segment.startsWith('[') && segment.endsWith(']')) {
-        continue;
-      }
-      // Otherwise, exact match required
-      if (segment !== pathSegments[i]) {
+      const seg = shellSegments[i];
+      if (seg.startsWith('[') && seg.endsWith(']')) continue;
+      if (seg !== pathSegments[i]) {
         matches = false;
         break;
       }
     }
-    
-    if (matches) {
-      return shellRoute;
-    }
+    if (matches) return shellRoute;
   }
-  
+
   return null;
 }
 
@@ -210,19 +240,24 @@ function getNetworkIp(): string | null {
 // ─── Banner ───────────────────────────────────────────────────────────────────
 
 function printBanner(port: number): void {
-  const envFiles = detectEnvFiles(process.cwd());
+  const envFiles = envFilesFor(process.cwd(), process.env.NODE_ENV ?? 'production');
   const networkIp = getNetworkIp();
 
-  console.log(`\n  ${C.BOLD}${C.CYAN}ß Bini.js${C.RESET}  (production)`);
+  console.log(`\n  ${C.CYAN}ß Bini.js${C.RESET} (production)`);
 
   if (envFiles.length > 0) {
-    console.log(`  ${C.GREEN}➜${C.RESET}  Environments: ${envFiles.join(', ')}`);
+    const rel = envFiles.map((f) => path.relative(process.cwd(), f));
+    console.log(`  ${C.GREEN}➜${C.RESET}  Environments: ${rel.join(', ')}`);
   }
 
   console.log(`  ${C.GREEN}➜${C.RESET}  Local:   ${C.CYAN}http://localhost:${port}/${C.RESET}`);
 
   if (networkIp) {
     console.log(`  ${C.GREEN}➜${C.RESET}  Network: ${C.CYAN}http://${networkIp}:${port}/${C.RESET}`);
+  }
+
+  if (config.base) {
+    console.log(`  ${C.GREEN}➜${C.RESET}  Base:    ${C.CYAN}${config.base}${C.RESET}`);
   }
 
   console.log(`  ${C.DIM}${C.GREEN}➜${C.RESET}  ${C.DIM}press ${C.RESET}h + enter${C.DIM} to show help${C.RESET}`);
@@ -243,11 +278,9 @@ async function isPortFree(port: number): Promise<boolean> {
 async function findFreePort(start: number): Promise<number> {
   for (let port = start; port < start + 100; port++) {
     if (await isPortFree(port)) {
-      if (port !== start) {
-        console.log(`\n  ${C.YELLOW}⚠${C.RESET}  Port ${start} in use — using ${port} instead.`);
-      }
       return port;
     }
+    console.log(`Port ${port} is in use, trying another one...`);
   }
   throw new Error(`No free port found in range ${start}–${start + 99}`);
 }
@@ -269,7 +302,7 @@ function startKeyboardLoop(port: number): void {
         console.log('');
         break;
       case 'o': {
-        const url = `http://localhost:${port}/`;
+        const url = `http://localhost:${port}${config.base || ''}/`;
         const cmd = process.platform === 'win32' ? `start ${url}`
           : process.platform === 'darwin' ? `open ${url}`
             : `xdg-open ${url}`;
@@ -284,135 +317,6 @@ function startKeyboardLoop(port: number): void {
   rl.on('close', () => process.exit(0));
 }
 
-// ─── API Route Scanner ────────────────────────────────────────────────────
-
-let routeCache: ApiRoute[] | null = null;
-let routeIndex = new Map<string, ApiRoute>();
-
-const API_EXTS = new Set(['.ts', '.js']);
-const CATCH_ALL_PATTERN = /^\[\.\.\.[^\]]+\]$/;
-const DYNAMIC_PATTERN = /^\[[^\]]+\]$/;
-const SKIP_PATTERN = /^[_.]/;
-
-function getRouteCache(): ApiRoute[] {
-  if (!routeCache) {
-    const start = Date.now();
-    routeCache = scanApiRoutes(API_DIR);
-    routeIndex.clear();
-    for (let i = 0; i < routeCache.length; i++) {
-      routeIndex.set(routeCache[i].routePath, routeCache[i]);
-    }
-    if (process.env.NODE_ENV === 'development') {
-      console.log(`[bini-server] API routes scanned in ${Date.now() - start}ms`);
-    }
-  }
-  return routeCache;
-}
-
-function scanApiRoutes(dir: string, baseRoute = '', depth = 0): ApiRoute[] {
-  const routes: ApiRoute[] = [];
-  if (depth > 100 || !fs.existsSync(dir)) return routes;
-
-  let entries: fs.Dirent[];
-  try {
-    entries = fs.readdirSync(dir, { withFileTypes: true });
-  } catch {
-    return routes;
-  }
-
-  for (let i = 0; i < entries.length; i++) {
-    const entry = entries[i];
-    if (SKIP_PATTERN.test(entry.name)) continue;
-
-    const fullPath = path.join(dir, entry.name);
-
-    if (entry.isDirectory()) {
-      const isCatchAll = CATCH_ALL_PATTERN.test(entry.name);
-      const isDynamic = DYNAMIC_PATTERN.test(entry.name);
-      const segment = isCatchAll ? '*' : isDynamic ? `:${entry.name.slice(1, -1)}` : entry.name;
-
-      const childRoutes = scanApiRoutes(fullPath, `${baseRoute}/${segment}`, depth + 1);
-      for (let j = 0; j < childRoutes.length; j++) {
-        routes.push(childRoutes[j]);
-      }
-      continue;
-    }
-
-    const ext = path.extname(entry.name);
-    if (!API_EXTS.has(ext)) continue;
-
-    const base = path.basename(entry.name, ext);
-    const isCatchAll = base.startsWith('[...') && base.endsWith(']');
-    const isDynamic = base.startsWith('[') && base.endsWith(']');
-
-    let routePath: string;
-    if (isCatchAll) routePath = `${baseRoute}/*`;
-    else if (base === 'index') routePath = baseRoute || '/';
-    else if (isDynamic) routePath = `${baseRoute}/:${base.slice(1, -1)}`;
-    else routePath = `${baseRoute}/${base}`;
-
-    routes.push({ routePath: `/api${routePath}`, filePath: fullPath });
-  }
-
-  return routes;
-}
-
-function matchRoute(pattern: string, pathname: string): Record<string, string> | null {
-  const patParts = pattern.split('/').filter(Boolean);
-  const urlParts = pathname.split('/').filter(Boolean);
-
-  const isCatchAll = patParts[patParts.length - 1] === '*';
-  if (isCatchAll) {
-    const prefix = patParts.slice(0, -1);
-    if (urlParts.length < prefix.length) return null;
-    for (let i = 0; i < prefix.length; i++) {
-      if (!prefix[i].startsWith(':') && prefix[i] !== urlParts[i]) return null;
-    }
-    return { '*': urlParts.slice(prefix.length).join('/') };
-  }
-
-  if (patParts.length !== urlParts.length) return null;
-
-  const params: Record<string, string> = {};
-  for (let i = 0; i < patParts.length; i++) {
-    if (patParts[i].startsWith(':')) {
-      const value = decodeURIComponent(urlParts[i]);
-      if (value.includes('..') || value.includes('//')) return null;
-      params[patParts[i].slice(1)] = value;
-    } else if (patParts[i] !== urlParts[i]) {
-      return null;
-    }
-  }
-  return params;
-}
-
-// ─── Module Cache ──────────────────────────────────────────────────────────
-
-const moduleCache = new Map<string, { mtime: number; handler: unknown }>();
-
-async function importHandler(filePath: string): Promise<unknown> {
-  let mtime = 0;
-  try {
-    mtime = fs.statSync(filePath).mtimeMs;
-  } catch {
-    return null;
-  }
-
-  const cached = moduleCache.get(filePath);
-  if (cached?.mtime === mtime) return cached.handler;
-
-  try {
-    const mod = await import(pathToFileURL(filePath).href + '?t=' + mtime);
-    const handler = mod.default ?? null;
-    moduleCache.set(filePath, { mtime, handler });
-    return handler;
-  } catch (e: any) {
-    console.error(`[bini-api] import error: ${filePath}`, e?.message);
-    moduleCache.delete(filePath);
-    return null;
-  }
-}
-
 // ─── Body Reader ────────────────────────────────────────────────────────────
 
 function readBody(req: http.IncomingMessage): Promise<Buffer | undefined> {
@@ -423,11 +327,11 @@ function readBody(req: http.IncomingMessage): Promise<Buffer | undefined> {
     const timer = setTimeout(() => {
       req.destroy();
       reject(new Error('Request body timeout'));
-    }, BODY_TIMEOUT);
+    }, config.bodyTimeout);
 
     req.on('data', (chunk: Buffer) => {
       size += chunk.byteLength;
-      if (size > BODY_SIZE_LIMIT) {
+      if (size > config.bodySizeLimit) {
         clearTimeout(timer);
         req.destroy();
         reject(new Error('Request body too large'));
@@ -458,140 +362,168 @@ function normalizeHeaders(raw: http.IncomingHttpHeaders): Record<string, string>
   return out;
 }
 
-// ─── CORS ─────────────────────────────────────────────────────────────────────
+// ─── API path helpers (strip base, then "/api") ─────────────────────────────
 
-const CORS_HEADERS: Record<string, string> = {
-  'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Methods': 'GET,POST,PUT,PATCH,DELETE,OPTIONS,HEAD',
-  'Access-Control-Allow-Headers': 'Content-Type,Authorization,X-Request-ID',
-  'Vary': 'Origin',
-};
+function toApiPath(pathname: string): string | null {
+  let p = pathname;
+  const base = config.base;
+  if (base) {
+    if (p === base || p.startsWith(base + '/')) p = p.slice(base.length) || '/';
+    else return null;
+  }
+  if (p === '/api') return '/';
+  if (p.startsWith('/api/')) return p.slice(4);
+  return null;
+}
+
+function isApiRequest(url: string | undefined): boolean {
+  if (!url) return false;
+  try { return toApiPath(new URL(url, 'http://localhost').pathname) !== null; }
+  catch { return false; }
+}
+
+// ─── Compiled API loader ────────────────────────────────────────────────────
+
+type ApiFetch = (
+  request: Request,
+  env?: Record<string, unknown>,
+  ctx?: { waitUntil(p: Promise<unknown>): void },
+) => Promise<Response>;
+
+let apiFetch: ApiFetch | null = null;
+let apiLoadPromise: Promise<ApiFetch> | null = null;
+
+async function loadApiFetch(): Promise<ApiFetch> {
+  if (apiFetch) return apiFetch;
+  if (apiLoadPromise) return apiLoadPromise;
+
+  apiLoadPromise = (async () => {
+    try {
+      const entry = resolveApiEntry();
+      if (!entry) throw new Error(`${config.apiEntry} not found`);
+      const mod = await import(pathToFileURL(entry).href);
+      if (typeof mod.fetch !== 'function') {
+        throw new Error(`${entry} does not export fetch()`);
+      }
+      apiFetch = mod.fetch as ApiFetch;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.warn(
+        `\n  ${C.YELLOW}⚠${C.RESET}  No compiled API in ${config.apiDir}.\n` +
+        `      ${C.DIM}${msg}${C.RESET}\n` +
+        `      API requests will return 404. Run ${C.CYAN}npm run build${C.RESET} to compile it.\n`,
+      );
+      apiFetch = async () => new Response(
+        JSON.stringify({ error: 'No API routes compiled' }),
+        { status: 404, headers: { 'content-type': 'application/json' } },
+      );
+    }
+    return apiFetch;
+  })();
+
+  return apiLoadPromise;
+}
+
+async function toWebRequest(req: http.IncomingMessage, host: string): Promise<Request> {
+  const method = (req.method ?? 'GET').toUpperCase();
+  const body = method !== 'GET' && method !== 'HEAD' ? await readBody(req) : undefined;
+  return new Request(`http://${host}${req.url ?? '/'}`, {
+    method,
+    headers: normalizeHeaders(req.headers),
+    body: body ? new Uint8Array(body) : null,
+  });
+}
+
+// ─── Response helpers ───────────────────────────────────────────────────────
+
+function sendJson(
+  res: http.ServerResponse,
+  status: number,
+  body: unknown,
+  extra: Record<string, string> = {},
+): void {
+  res.writeHead(status, { 'content-type': 'application/json', ...extra });
+  res.end(JSON.stringify(body));
+}
+
+async function sendWebResponse(
+  res: http.ServerResponse,
+  webRes: Response,
+  method: string,
+): Promise<void> {
+  const headers: Record<string, string | string[]> = {};
+  webRes.headers.forEach((v, k) => {
+    if (k.toLowerCase() !== 'set-cookie') headers[k.toLowerCase()] = v;
+  });
+  const cookies = (webRes.headers as any).getSetCookie?.() as string[] | undefined;
+  if (cookies && cookies.length > 0) headers['set-cookie'] = cookies;
+
+  res.writeHead(webRes.status, headers);
+  if (method === 'HEAD' || !webRes.body) { res.end(); return; }
+
+  try {
+    await pipeline(Readable.fromWeb(webRes.body as any), res);
+  } catch {
+    // Client disconnected mid-stream — ignore
+  }
+}
+
+function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
+  let timer: ReturnType<typeof setTimeout>;
+  return Promise.race([
+    p,
+    new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(new Error('Handler timeout')), ms);
+    }),
+  ]).finally(() => clearTimeout(timer));
+}
+
+function publicErrorMessage(e: unknown): string {
+  return config.isProd ? 'Internal server error' : (e instanceof Error ? e.message : String(e));
+}
 
 // ─── API Handler ────────────────────────────────────────────────────────────
 
 async function handleApiRequest(
   req: http.IncomingMessage,
   res: http.ServerResponse,
-  next: () => void,
 ): Promise<void> {
-  if (req.method === 'OPTIONS') {
-    const headers = CORS_ENABLED
-      ? { ...CORS_HEADERS, 'Access-Control-Max-Age': '86400' }
-      : {};
-    res.writeHead(204, headers);
-    res.end();
-    return;
-  }
-
-  const routes = getRouteCache();
-  const host = req.headers.host ?? 'localhost';
-  const rawUrl = `http://${host}${req.url ?? '/'}`;
   const method = (req.method ?? 'GET').toUpperCase();
+  const host = req.headers.host ?? 'localhost';
 
   let parsedUrl: URL;
+  try { parsedUrl = new URL(`http://${host}${req.url ?? '/'}`); }
+  catch { return sendJson(res, 400, { error: 'Bad request URL' }); }
+
+  if (toApiPath(parsedUrl.pathname) === null) return sendJson(res, 404, { error: 'Not Found' });
+
+  const fetchApi = await loadApiFetch();
+
+  let webReq: Request;
   try {
-    parsedUrl = new URL(rawUrl);
-  } catch {
-    res.writeHead(400, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ error: 'Bad request URL' }));
-    return;
-  }
-
-  const { pathname, search } = parsedUrl;
-
-  let matchedRoute: ApiRoute | null = null;
-  let params: Record<string, string> | null = null;
-
-  if (routeIndex.has(pathname)) {
-    matchedRoute = routeIndex.get(pathname)!;
-    params = {};
-  } else {
-    for (let i = 0; i < routes.length; i++) {
-      const route = routes[i];
-      params = matchRoute(route.routePath, pathname);
-      if (params !== null) {
-        matchedRoute = route;
-        break;
-      }
-    }
-  }
-
-  if (!matchedRoute) {
-    const headers = CORS_ENABLED ? { ...CORS_HEADERS } : {};
-    res.writeHead(404, { 'Content-Type': 'application/json', ...headers });
-    res.end(JSON.stringify({ error: `No API handler for ${pathname}` }));
-    return;
-  }
-
-  let body: Buffer | undefined;
-  if (!['GET', 'HEAD'].includes(method)) {
-    try {
-      body = await readBody(req);
-    } catch (e: any) {
-      const status = e.message.includes('too large') ? 413 : 408;
-      res.writeHead(status, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ error: e.message }));
-      return;
-    }
-  }
-
-  const handler = await importHandler(matchedRoute.filePath);
-  if (!handler) {
-    const headers = CORS_ENABLED ? { ...CORS_HEADERS } : {};
-    res.writeHead(500, { 'Content-Type': 'application/json', ...headers });
-    res.end(JSON.stringify({ error: 'Failed to load handler' }));
-    return;
-  }
-
-  const normalizedHeaders = normalizeHeaders(req.headers);
-
-  let webRes: Response;
-  try {
-    if (typeof (handler as any).fetch === 'function') {
-      const honoUrl = `http://${host}${pathname.replace(/^\/api/, '') || '/'}${search}`;
-      webRes = await (handler as { fetch: Function }).fetch(new Request(honoUrl, {
-        method,
-        headers: normalizedHeaders,
-        body: body ? new Uint8Array(body) : null,
-      }));
-    } else if (typeof handler === 'function') {
-      const reqWithParams = new Request(rawUrl, {
-        method,
-        headers: { ...normalizedHeaders, 'x-bini-params': JSON.stringify(params ?? {}) },
-        body: body ? new Uint8Array(body) : null,
-      });
-
-      const result = await Promise.race([
-        (handler as Function)(reqWithParams),
-        new Promise<never>((_, reject) =>
-          setTimeout(() => reject(new Error('Handler timeout')), HANDLER_TIMEOUT)
-        ),
-      ]);
-
-      webRes = result instanceof Response
-        ? result
-        : new Response(JSON.stringify(result), {
-          status: 200,
-          headers: { 'Content-Type': 'application/json' },
-        });
-    } else {
-      const headers = CORS_ENABLED ? { ...CORS_HEADERS } : {};
-      res.writeHead(500, { 'Content-Type': 'application/json', ...headers });
-      res.end(JSON.stringify({ error: 'Handler has no valid default export' }));
-      return;
-    }
+    webReq = await toWebRequest(req, host);
   } catch (e: any) {
-    console.error('[bini-api] handler error:', e?.message ?? e);
-    const headers = CORS_ENABLED ? { ...CORS_HEADERS } : {};
-    res.writeHead(500, { 'Content-Type': 'application/json', ...headers });
-    res.end(JSON.stringify({ error: e?.message ?? 'Internal server error' }));
-    return;
+    const message = e?.message ?? 'Bad request';
+    return sendJson(res, message.includes('too large') ? 413 : 408, { error: message });
   }
 
-  const finalHeaders: Record<string, string> = CORS_ENABLED ? { ...CORS_HEADERS } : {};
-  webRes.headers.forEach((v, k) => { finalHeaders[k] = v; });
-  res.writeHead(webRes.status, finalHeaders);
-  res.end(Buffer.from(await webRes.arrayBuffer()));
+  const ctx = {
+    waitUntil(p: Promise<unknown>): void {
+      p.catch(() => {});
+    },
+  };
+
+  try {
+    const webRes = await withTimeout(
+      fetchApi(webReq, process.env as Record<string, unknown>, ctx),
+      config.handlerTimeout,
+    );
+    await sendWebResponse(res, webRes, method);
+  } catch (e) {
+    console.error('[bini-api] handler error:', e);
+    if (!res.headersSent) sendJson(res, 500, { error: publicErrorMessage(e) });
+    else res.end();
+  }
 }
 
 // ─── Static file server ───────────────────────────────────────────────────────
@@ -608,6 +540,7 @@ async function sendFile(
   filePath: string,
   req: http.IncomingMessage,
   res: http.ServerResponse,
+  status = 200,
 ): Promise<void> {
   const ext = path.extname(filePath).toLowerCase();
   const mimeType = MIME_TYPES[ext] ?? 'application/octet-stream';
@@ -623,13 +556,13 @@ async function sendFile(
   }
 
   const etag = getETag(stat);
-  if (req.headers['if-none-match'] === etag) {
+  if (status === 200 && req.headers['if-none-match'] === etag) {
     res.writeHead(304);
     res.end();
     return;
   }
 
-  res.writeHead(200, {
+  res.writeHead(status, {
     'Content-Type': mimeType,
     'Content-Length': stat.size,
     'Cache-Control': isAsset ? 'public, max-age=31536000, immutable' : 'no-cache',
@@ -675,15 +608,21 @@ async function serveStatic(
   res: http.ServerResponse,
   next: () => void,
 ): Promise<void> {
-  const pathname = new URL(req.url ?? '/', 'http://localhost').pathname;
-  
-  // API routes are handled separately
-  if (pathname.startsWith('/api')) return next();
+  const rawPathname = new URL(req.url ?? '/', 'http://localhost').pathname;
 
-  // Check if it's an asset with extension
+  if (toApiPath(rawPathname) !== null) return next();
+
+  const pathname = stripBase(rawPathname);
+  if (pathname === null) return next();
+
+  if (pathname.includes('\0') || pathname.split('/').some(s => s === '..')) {
+    return next();
+  }
+
   const hasExtension = path.extname(pathname).length > 0;
   if (hasExtension) {
-    const filePath = path.join(DIST_DIR, pathname);
+    const filePath = path.join(config.distDir, pathname);
+    if (filePath.startsWith(config.compiledApiDir)) return next();
     try {
       const stat = await fs.promises.stat(filePath);
       if (stat.isFile()) {
@@ -691,13 +630,12 @@ async function serveStatic(
         return;
       }
     } catch {
-      // File doesn't exist, continue
+      // missing
     }
     return next();
   }
 
-  // Try to serve as static file (e.g., /about → /about/index.html)
-  const staticFilePath = path.join(DIST_DIR, pathname, 'index.html');
+  const staticFilePath = path.join(config.distDir, pathname === '/' ? '' : pathname, 'index.html');
   try {
     const stat = await fs.promises.stat(staticFilePath);
     if (stat.isFile()) {
@@ -705,13 +643,12 @@ async function serveStatic(
       return;
     }
   } catch {
-    // File doesn't exist
+    // missing
   }
 
-  // Check if this is a dynamic route that should use a shell
   const matchingShell = findMatchingShellRoute(pathname);
   if (matchingShell) {
-    const shellPath = path.join(DIST_DIR, matchingShell, 'index.html');
+    const shellPath = path.join(config.distDir, matchingShell, 'index.html');
     try {
       const stat = await fs.promises.stat(shellPath);
       if (stat.isFile()) {
@@ -719,12 +656,22 @@ async function serveStatic(
         return;
       }
     } catch {
-      // Shell doesn't exist
+      // missing
     }
   }
 
-  // Fallback to index.html (SPA mode)
-  const indexPath = path.join(DIST_DIR, 'index.html');
+  const notFoundPath = path.join(config.distDir, '404.html');
+  try {
+    const stat = await fs.promises.stat(notFoundPath);
+    if (stat.isFile()) {
+      await sendFile(notFoundPath, req, res, 404);
+      return;
+    }
+  } catch {
+    // no 404.html
+  }
+
+  const indexPath = path.join(config.distDir, 'index.html');
   try {
     await fs.promises.access(indexPath);
     await sendFile(indexPath, req, res);
@@ -746,7 +693,7 @@ function compose(middlewares: Middleware[]) {
       } catch (e: any) {
         if (!res.headersSent) {
           res.writeHead(500, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({ error: e?.message ?? 'Internal Server Error' }));
+          res.end(JSON.stringify({ error: publicErrorMessage(e) }));
         }
       }
     };
@@ -757,20 +704,23 @@ function compose(middlewares: Middleware[]) {
 // ─── Start ────────────────────────────────────────────────────────────────────
 
 export async function start(): Promise<void> {
-  if (!fs.existsSync(DIST_DIR)) {
-    console.error(`\n  ${C.RED}✗${C.RESET}  dist/ not found at ${DIST_DIR}.\n      Run ${C.CYAN}npm run build${C.RESET} first.\n`);
+  loadEnvFiles(process.cwd(), process.env.NODE_ENV ?? 'production');
+  refreshConfig();
+
+  if (!fs.existsSync(config.distDir)) {
+    console.error(`\n  ${C.RED}✗${C.RESET}  dist/ not found at ${config.distDir}.\n      Run ${C.CYAN}npm run build${C.RESET} first.\n`);
     process.exit(1);
   }
 
-  // Pre-scan shell routes at startup
+  await loadApiFetch();
   getShellRoutes();
 
-  const port = await findFreePort(DEFAULT_PORT);
+  const port = await findFreePort(config.defaultPort);
 
   const handler = compose([
     async (req, res, next) => {
-      if (!req.url?.startsWith('/api')) return next();
-      await handleApiRequest(req, res, next);
+      if (!isApiRequest(req.url)) return next();
+      await handleApiRequest(req, res);
     },
     serveStatic,
     (_req, res) => {
